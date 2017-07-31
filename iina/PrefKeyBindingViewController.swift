@@ -10,11 +10,11 @@ import Cocoa
 import MASPreferences
 
 class PrefKeyBindingViewController: NSViewController, MASPreferencesViewController {
-  
+
   override var nibName: String? {
     return "PrefKeyBindingViewController"
   }
-  
+
   override var identifier: String? {
     get {
       return "keybinding"
@@ -23,31 +23,34 @@ class PrefKeyBindingViewController: NSViewController, MASPreferencesViewControll
       super.identifier = newValue
     }
   }
-  
+
   var toolbarItemImage: NSImage {
     return NSImage(named: "toolbar_key")!
   }
 
   var toolbarItemLabel: String {
-    return "Keybindings"
+    view.layoutSubtreeIfNeeded()
+    return NSLocalizedString("preference.keybindings", comment: "Keybindings")
   }
-  
-  lazy var keyRecordViewController: KeyRecordViewController = KeyRecordViewController()
-  
+
+  var hasResizableWidth: Bool = false
+
   static let defaultConfigs: [String: String] = [
+    "IINA Default": Bundle.main.path(forResource: "iina-default-input", ofType: "conf", inDirectory: "config")!,
     "MPV Default": Bundle.main.path(forResource: "input", ofType: "conf", inDirectory: "config")!
   ]
-  
+
   var userConfigs: [String: Any]!
-  
+
   var currentMapping: [KeyMapping] = []
   var currentConfName: String!
   var currentConfFilePath: String!
-  
+
   var shouldEnableEdit: Bool = true
-  
+  var displayRawValues: Bool = false
+
   // MARK: - Outlets
-  
+
   @IBOutlet weak var configSelectPopUp: NSPopUpButton!
   @IBOutlet weak var kbTableView: NSTableView!
   @IBOutlet weak var addKmBtn: NSButton!
@@ -56,16 +59,17 @@ class PrefKeyBindingViewController: NSViewController, MASPreferencesViewControll
   @IBOutlet weak var deleteConfFileBtn: NSButton!
   @IBOutlet weak var newConfigBtn: NSButton!
   @IBOutlet weak var duplicateConfigBtn: NSButton!
-  
-  
-  
+
+
+
   override func viewDidLoad() {
     super.viewDidLoad()
-    
+
     // tableview
     kbTableView.dataSource = self
     kbTableView.delegate = self
-    
+    kbTableView.doubleAction = #selector(editRow)
+
     // config files
     // - default
     PrefKeyBindingViewController.defaultConfigs.forEach { (k, v) in
@@ -75,13 +79,12 @@ class PrefKeyBindingViewController: NSViewController, MASPreferencesViewControll
     guard let uc = UserDefaults.standard.dictionary(forKey: Preference.Key.inputConfigs)
     else  {
       Utility.fatal("Cannot get config file list!")
-      return
     }
     userConfigs = uc
     userConfigs.forEach { (k, v) in
       configSelectPopUp.addItem(withTitle: k)
     }
-    
+
     var currentConf = ""
     var gotCurrentConf = false
     if let confFromUd = UserDefaults.standard.string(forKey: Preference.Key.currentInputConfigName) {
@@ -91,7 +94,7 @@ class PrefKeyBindingViewController: NSViewController, MASPreferencesViewControll
       }
     }
     if !gotCurrentConf {
-      currentConf = configSelectPopUp.titleOfSelectedItem ?? configSelectPopUp.itemTitles.first ?? "Default"
+      currentConf = configSelectPopUp.titleOfSelectedItem ?? configSelectPopUp.itemTitles.first ?? "IINA Default"
     }
     // load
     configSelectPopUp.selectItem(withTitle: currentConf)
@@ -102,9 +105,25 @@ class PrefKeyBindingViewController: NSViewController, MASPreferencesViewControll
     currentConfFilePath = path
     loadConfigFile()
   }
-  
+
   // MARK: - IBActions
-  
+
+  func showKeyBindingPanel(key: String = "", action: String = "", ok: (String, String) -> Void) {
+    let panel = NSAlert()
+    let keyRecordViewController = KeyRecordViewController()
+    keyRecordViewController.keyCode = key
+    keyRecordViewController.action = action
+    panel.messageText = NSLocalizedString("keymapping.title", comment: "Key Mapping")
+    panel.informativeText = NSLocalizedString("keymapping.message", comment: "Press any key to record.")
+    panel.accessoryView = keyRecordViewController.view
+    panel.window.initialFirstResponder = keyRecordViewController.keyRecordView
+    panel.addButton(withTitle: NSLocalizedString("general.ok", comment: "OK"))
+    panel.addButton(withTitle: NSLocalizedString("general.cancel", comment: "Cancel"))
+    if panel.runModal() == NSAlertFirstButtonReturn {
+      ok(keyRecordViewController.keyCode, keyRecordViewController.action)
+    }
+  }
+
   @IBAction func configSelectAction(_ sender: AnyObject) {
     guard let title = configSelectPopUp.selectedItem?.title else { return }
     currentConfName = title
@@ -112,28 +131,25 @@ class PrefKeyBindingViewController: NSViewController, MASPreferencesViewControll
     loadConfigFile()
     changeButtonEnabled()
   }
-  
+
   @IBAction func addKeyMappingBtnAction(_ sender: AnyObject) {
-    let panel = NSAlert()
-    panel.messageText = "Add Key Mapping"
-    panel.informativeText = "Press any key to start."
-    panel.accessoryView = keyRecordViewController.view
-    panel.window.initialFirstResponder = keyRecordViewController.keyRecordView
-    panel.addButton(withTitle: "OK")
-    panel.addButton(withTitle: "Cancel")
-    let response = panel.runModal()
-    if response == NSAlertFirstButtonReturn {
-      let key = keyRecordViewController.keyCode
-      let action = keyRecordViewController.action
+    showKeyBindingPanel { key, action in
       guard !key.isEmpty && !action.isEmpty else { return }
-      let splitted = action.characters.split(separator: " ").map { String($0) }
-      currentMapping.append(KeyMapping(key: key, action: splitted))
+      if action.hasPrefix("@iina") {
+        let trimmedAction = action.substring(from: action.index(action.startIndex, offsetBy: "@iina".characters.count)).trimmingCharacters(in: .whitespaces)
+        currentMapping.append(KeyMapping(key: key,
+                                         rawAction: trimmedAction,
+                                         isIINACommand: true))
+      } else {
+        currentMapping.append(KeyMapping(key: key, rawAction: action))
+      }
+
       kbTableView.reloadData()
       kbTableView.scrollRowToVisible(currentMapping.count - 1)
+      saveToConfFile()
     }
-    saveToConfFile()
   }
-  
+
   @IBAction func removeKeyMappingBtnAction(_ sender: AnyObject) {
     if kbTableView.selectedRow >= 0 {
       currentMapping.remove(at: kbTableView.selectedRow)
@@ -141,19 +157,19 @@ class PrefKeyBindingViewController: NSViewController, MASPreferencesViewControll
     }
     saveToConfFile()
   }
-  
+
   // FIXME: may combine with duplicate action?
   @IBAction func newConfFileAction(_ sender: AnyObject) {
     // prompt
     var newName = ""
-    let result = Utility.quickPromptPanel(messageText: "New Input Configuration", informativeText: "Please enter a name for the new configuration.") { newName = $0 }
+    let result = Utility.quickPromptPanel("config.new") { newName = $0 }
     if !result { return }
     guard !newName.isEmpty else {
-      Utility.showAlert(message: "The name cannot br empty.")
+      Utility.showAlert("config.empty_name")
       return
     }
     guard userConfigs[newName] == nil && PrefKeyBindingViewController.defaultConfigs[newName] == nil else {
-      Utility.showAlert(message: "The name already exists.")
+      Utility.showAlert("config.name_existing")
       return
     }
     // new file
@@ -162,12 +178,12 @@ class PrefKeyBindingViewController: NSViewController, MASPreferencesViewControll
     let fm = FileManager.default
     // - if exists
     if fm.fileExists(atPath: newFilePath) {
-      if Utility.quickAskPanel(title: "Config file already exists", infoText: "It should not happen. Choose OK to overwrite, Cancel to reveal the file in finder.") {
+      if Utility.quickAskPanel("config.file_existing") {
         // - delete file
         do {
           try fm.removeItem(atPath: newFilePath)
         } catch {
-          Utility.showAlert(message: "Cannot delete the file.")
+          Utility.showAlert("error_deleting_file")
           return
         }
       } else {
@@ -177,7 +193,7 @@ class PrefKeyBindingViewController: NSViewController, MASPreferencesViewControll
     }
     // - new file
     if !fm.createFile(atPath: newFilePath, contents: nil, attributes: nil) {
-      Utility.showAlert(message: "Cannot create config file.")
+      Utility.showAlert("config.cannot_create")
       return
     }
     // save
@@ -191,15 +207,15 @@ class PrefKeyBindingViewController: NSViewController, MASPreferencesViewControll
     loadConfigFile()
     changeButtonEnabled()
   }
-  
-  
+
+
   @IBAction func duplicateConfFileAction(_ sender: AnyObject) {
     // prompt
     var newName = ""
-    let result = Utility.quickPromptPanel(messageText: "New Input Configuration", informativeText: "Please enter a name for the duplicated configuration.") { newName = $0 }
+    let result = Utility.quickPromptPanel("config.duplicate") { newName = $0 }
     if !result { return }
     if userConfigs[newName] != nil || PrefKeyBindingViewController.defaultConfigs[newName] != nil {
-      Utility.showAlert(message: "The name already exists.")
+      Utility.showAlert("config.name_existing")
       return
     }
     // copy
@@ -209,12 +225,12 @@ class PrefKeyBindingViewController: NSViewController, MASPreferencesViewControll
     let fm = FileManager.default
     // - if exists
     if fm.fileExists(atPath: newFilePath) {
-      if Utility.quickAskPanel(title: "Config file already exists", infoText: "It should not happen. Choose OK to overwrite, Cancel to reveal the file in finder.") {
+      if Utility.quickAskPanel("config.file_existing") {
         // - delete file
         do {
           try fm.removeItem(atPath: newFilePath)
         } catch {
-          Utility.showAlert(message: "Cannot delete the file.")
+          Utility.showAlert("error_deleting_file")
           return
         }
       } else {
@@ -226,7 +242,7 @@ class PrefKeyBindingViewController: NSViewController, MASPreferencesViewControll
     do {
       try fm.copyItem(atPath: currFilePath, toPath: newFilePath)
     } catch {
-      Utility.showAlert(message: "Cannot create config file.")
+      Utility.showAlert("config.cannot_create")
       return
     }
     // save
@@ -240,18 +256,17 @@ class PrefKeyBindingViewController: NSViewController, MASPreferencesViewControll
     loadConfigFile()
     changeButtonEnabled()
   }
-  
+
   @IBAction func revealConfFileAction(_ sender: AnyObject) {
     let url = URL(fileURLWithPath: currentConfFilePath)
     NSWorkspace.shared().activateFileViewerSelecting([url])
   }
-  
+
   @IBAction func deleteConfFileAction(_ sender: AnyObject) {
     do {
       try FileManager.default.removeItem(atPath: currentConfFilePath)
     } catch {
-      Utility.showAlert(message: "Cannot delete config file!")
-      return
+      Utility.showAlert("error_deleting_file")
     }
     userConfigs.removeValue(forKey: currentConfName)
     UserDefaults.standard.set(userConfigs, forKey: Preference.Key.inputConfigs)
@@ -262,9 +277,15 @@ class PrefKeyBindingViewController: NSViewController, MASPreferencesViewControll
     loadConfigFile()
     changeButtonEnabled()
   }
-  
+
+  @IBAction func displayRawValueAction(_ sender: NSButton) {
+    displayRawValues = sender.state == NSOnState
+    kbTableView.doubleAction = displayRawValues ? nil : #selector(editRow)
+    kbTableView.reloadData()
+  }
+
   // MARK: - UI
-  
+
   private func changeButtonEnabled() {
     shouldEnableEdit = !isDefaultConfig(currentConfName)
     [revealConfFileBtn, deleteConfFileBtn, addKmBtn, removeKmBtn].forEach { btn in
@@ -272,42 +293,39 @@ class PrefKeyBindingViewController: NSViewController, MASPreferencesViewControll
     }
     kbTableView.tableColumns.forEach { $0.isEditable = shouldEnableEdit }
   }
-  
+
   func saveToConfFile() {
+    setKeybindingsForPlayerCore()
     do {
       try KeyMapping.generateConfData(from: currentMapping).write(toFile: currentConfFilePath, atomically: true, encoding: .utf8)
     } catch {
-      Utility.showAlert(message: "Cannot write to config file!")
+      Utility.showAlert("config.cannot_write")
     }
   }
-  
-  
-  // MARK: - Private
-  
-  private func loadConfigFile() {
-    let reader = StreamReader(path: currentConfFilePath)
-    currentMapping = []
-    while var line: String = reader?.nextLine() {      // ignore empty lines
-      if line.isEmpty { continue }
-      // igore comment
-      if line.hasPrefix("#") { continue }
-      // remove inline comment
-      if let sharpIndex = line.characters.index(of: "#") {
-        line = line.substring(to: sharpIndex)
-      }
-      // split
-      let splitted = line.characters.split(separator: " ", maxSplits: 1)
-      let key = String(splitted[0])
-      let action = splitted[1].split(separator: " ").map { seq in return String(seq) }
 
-      currentMapping.append(KeyMapping(key: key, action: action, comment: nil))
+
+  // MARK: - Private
+
+  private func loadConfigFile() {
+    if let mapping = KeyMapping.parseInputConf(at: currentConfFilePath) {
+      currentMapping = mapping
+    } else {
+      // on error
+      Utility.showAlert("keybinding_config.error", arguments: [currentConfName])
+      let title = "IINA Default"
+      currentConfName = title
+      currentConfFilePath = getFilePath(forConfig: title)!
+      configSelectPopUp.selectItem(withTitle: title)
+      loadConfigFile()
+      changeButtonEnabled()
+      return
     }
     UserDefaults.standard.set(currentConfName, forKey: Preference.Key.currentInputConfigName)
+    setKeybindingsForPlayerCore()
     kbTableView.reloadData()
   }
-  
+
   private func getFilePath(forConfig conf: String, showAlert: Bool = true) -> String? {
-    
     // if is default config
     if let dv = PrefKeyBindingViewController.defaultConfigs[conf] {
       return dv
@@ -315,45 +333,69 @@ class PrefKeyBindingViewController: NSViewController, MASPreferencesViewControll
       return uv
     } else {
       if showAlert {
-        Utility.showAlert(message: "Cannot find config file location!")
+        Utility.showAlert("error_finding_file", arguments: ["config"])
       }
       return nil
     }
   }
-  
+
   private func isDefaultConfig(_ conf: String) -> Bool {
     return PrefKeyBindingViewController.defaultConfigs[conf] != nil
   }
-    
+
+  private func setKeybindingsForPlayerCore() {
+    var result: [String: KeyMapping] = [:]
+    currentMapping.forEach { result[$0.key] = $0 }
+    PlayerCore.keyBindings = result
+  }
+
 }
 
+// MARK: -
+
 extension PrefKeyBindingViewController: NSTableViewDelegate, NSTableViewDataSource {
-  
+
   func numberOfRows(in tableView: NSTableView) -> Int {
     return currentMapping.count
   }
-  
+
   func tableView(_ tableView: NSTableView, objectValueFor tableColumn: NSTableColumn?, row: Int) -> Any? {
     guard let identifier = tableColumn?.identifier else { return nil }
 
-    let mapping = currentMapping[row]
+    guard let mapping = currentMapping.at(row) else { return nil }
     if identifier == Constants.Identifier.key {
-      return mapping.key
+      return displayRawValues ? mapping.key : mapping.prettyKey
     } else if identifier == Constants.Identifier.action {
-      return mapping.readableAction
+      return displayRawValues ? mapping.readableAction : mapping.prettyCommand
     }
     return ""
   }
-  
+
   func tableView(_ tableView: NSTableView, setObjectValue object: Any?, for tableColumn: NSTableColumn?, row: Int) {
     guard let value = object as? String,
       let identifier = tableColumn?.identifier else { return }
     if identifier == Constants.Identifier.key {
       currentMapping[row].key = value
     } else if identifier == Constants.Identifier.action {
-      currentMapping[row].action = value.characters.split(separator: " ").map { return String($0) }
+      currentMapping[row].rawAction = value
     }
     saveToConfFile()
   }
-  
+
+  func tableView(_ tableView: NSTableView, shouldEdit tableColumn: NSTableColumn?, row: Int) -> Bool {
+    return displayRawValues
+  }
+
+  func editRow() {
+    guard shouldEnableEdit else { return }
+    let selectedData = currentMapping[kbTableView.selectedRow]
+    showKeyBindingPanel(key: selectedData.key, action: selectedData.readableAction) { key, action in
+      guard !key.isEmpty && !action.isEmpty else { return }
+      selectedData.key = key
+      selectedData.rawAction = action
+      kbTableView.reloadData()
+      saveToConfFile()
+    }
+  }
+
 }

@@ -3,28 +3,29 @@
 //  iina
 //
 //  Created by lhc on 16/7/16.
-//  Copyright © 2016年 lhc. All rights reserved.
+//  Copyright © 2016 lhc. All rights reserved.
 //
 
 import Cocoa
 
 class ControlBarView: NSVisualEffectView {
-  
+
   var mousePosRelatedToView: CGPoint?
-  
+
   var isDragging: Bool = false
 
   override func awakeFromNib() {
     self.layer?.cornerRadius = 6
+    self.translatesAutoresizingMaskIntoConstraints = true
   }
-  
+
   override func mouseDown(with event: NSEvent) {
     mousePosRelatedToView = NSEvent.mouseLocation()
     mousePosRelatedToView!.x -= self.frame.origin.x
     mousePosRelatedToView!.y -= self.frame.origin.y
     isDragging = true
   }
-  
+
   override func mouseDragged(with event: NSEvent) {
     if mousePosRelatedToView != nil {
       let currentLocation = NSEvent.mouseLocation()
@@ -56,10 +57,15 @@ class ControlBarView: NSVisualEffectView {
         newOrigin.y = 0
       }
       self.setFrameOrigin(newOrigin)
+      // save position
+      let xPos = (newOrigin.x + frame.width / 2) / windowFrame.width
+      let yPos = (newOrigin.y) / windowFrame.height
+      UserDefaults.standard.set(xPos, forKey: Preference.Key.controlBarPositionHorizontal)
+      UserDefaults.standard.set(yPos, forKey: Preference.Key.controlBarPositionVertical)
     }
   }
   override func mouseUp(with event: NSEvent) {
     isDragging = false
   }
-  
+
 }

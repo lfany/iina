@@ -3,18 +3,40 @@
 //  iina
 //
 //  Created by lhc on 27/7/16.
-//  Copyright © 2016年 lhc. All rights reserved.
+//  Copyright © 2016 lhc. All rights reserved.
 //
+
+/// Available constants in OSD messages:
+///
+/// {{duration}}
+/// {{position}}
+/// {{percentPos}}
+/// {{currChapter}}
+/// {{chapterCount}}
 
 import Foundation
 
+fileprivate func toPercent(_ value: Double, _ bound: Double) -> Double {
+  return (value + bound).constrain(min: 0, max: bound * 2) / (bound * 2)
+}
+
+enum OSDType {
+  case normal
+  case withText(String)
+  case withProgress(Double)
+}
+
 enum OSDMessage {
-  
+
+  case fileStart(String)
+
   case pause
   case resume
+  case seek(String, Double)  // text, percentage
   case volume(Int)
   case speed(Double)
   case aspect(String)
+  case crop(String)
   case rotate(Int)
   case deinterlace(Bool)
   case audioDelay(Double)
@@ -27,107 +49,239 @@ enum OSDMessage {
   case abLoop(Int)
   case stop
   case chapter(String)
+  case track(MPVTrack)
   case addToPlaylist(Int)
   case clearPlaylist
-  
+
   case contrast(Int)
   case hue(Int)
   case saturation(Int)
   case brightness(Int)
   case gamma(Int)
-  
-  
-  func message() -> String {
+
+  case startFindingSub(String)  // sub source
+  case foundSub(Int)
+  case downloadedSub(String)  // filename
+  case savedSub
+  case cannotLogin
+  case fileError
+  case networkError
+  case canceled
+
+
+  func message() -> (String, OSDType) {
     switch self {
+    case .fileStart(let filename):
+      return (filename, .normal)
+
     case .pause:
-      return "Paused"
-      
+      return (NSLocalizedString("osd.pause", comment: "Pause"), .withText("{{position}} / {{duration}}"))
+
     case .resume:
-      return "Resumed"
-      
+      return (NSLocalizedString("osd.resume", comment: "Resume"), .withText("{{position}} / {{duration}}"))
+
+    case .seek(let text, let percent):
+      return (text, .withProgress(percent))
+
     case .volume(let value):
-      return "Volume: \(value)"
-      
+      return (
+        String(format: NSLocalizedString("osd.volume", comment: "Volume: %i"), value),
+        .withProgress(Double(value) / 100)
+      )
+
     case .speed(let value):
-      let formattedValue = String(format: "%.2f", value)
-      return "Speed: \(formattedValue)"
-      
-    case .aspect(let value):
-      return "Aspect Ratio: \(value)"
-      
+      return (
+        String(format: NSLocalizedString("osd.speed", comment: "Speed: %.2fx"), value),
+        .normal
+      )
+
+    case .aspect(var value):
+      if value == "Default" {
+        value = Constants.String.default
+      }
+      return (
+        String(format: NSLocalizedString("osd.aspect", comment: "Aspect Ratio: %@"), value),
+        .normal
+      )
+
+    case .crop(var value):
+      if value == "None" {
+        value = Constants.String.none
+      }
+      return (
+        String(format: NSLocalizedString("osd.crop", comment: "Crop: %@"), value),
+        .normal
+      )
+
     case .rotate(let value):
-      return "Rotate: \(value)°"
-      
+      return (
+        String(format: NSLocalizedString("osd.rotate", comment: "Rotate: %i°"), value),
+        .normal
+      )
+
     case .deinterlace(let enable):
-      return enable ? "Deinterlace: On" : "Deinterlace: Off"
-      
+      return (
+        String(format: NSLocalizedString("osd.deinterlace", comment: "Deinterlace: %@"), enable ? NSLocalizedString("general.on", comment: "On") : NSLocalizedString("general.off", comment: "Off")),
+        .normal
+      )
+     
     case .audioDelay(let value):
       if value == 0 {
-        return "Audio Delay: No Delay"
+        return (
+          NSLocalizedString("osd.audio_delay.nodelay", comment: "Audio Delay: No Delay"),
+          .withProgress(0.5)
+        )
       } else {
-        let word = value > 0 ? "Later" : "Earlier"
-        return "Audio Delay: \(abs(value))s \(word)"
+        let str = value > 0 ? String(format: NSLocalizedString("osd.audio_delay.later", comment: "Audio Delay: %fs Later"),abs(value)) : String(format: NSLocalizedString("osd.audio_delay.earlier", comment: "Audio Delay: %fs Earlier"), abs(value))
+        return (str, .withProgress(toPercent(value, 10)))
       }
-      
+
     case .subDelay(let value):
       if value == 0 {
-        return "Subtitle Delay: No Delay"
+        return (
+          NSLocalizedString("osd.sub_delay.nodelay", comment: "Subtitle Delay: No Delay"),
+          .withProgress(0.5)
+        )
       } else {
-        let word = value > 0 ? "Later" : "Earlier"
-        return "Subtitle Delay: \(abs(value))s \(word)"
+        let str = value > 0 ? String(format: NSLocalizedString("osd.sub_delay.later", comment: "Subtitle Delay: %fs Later"),abs(value)) : String(format: NSLocalizedString("osd.sub_delay.earlier", comment: "Subtitle Delay: %fs Earlier"), abs(value))
+        return (str, .withProgress(toPercent(value, 10)))
       }
-      
+
     case .subPos(let value):
-      return "Sub Position: \(value) / 100"
-      
+      return (
+        String(format: NSLocalizedString("osd.subtitle_pos", comment: "Subtitle Position: %f"), value),
+        .withProgress(value / 100)
+      )
+
     case .mute:
-      return "Mute"
-      
+      return (NSLocalizedString("osd.mute", comment: "Mute"), .normal)
+
     case .unMute:
-      return "Mute Off"
-      
+      return (NSLocalizedString("osd.unmute", comment: "Unmute"), .normal)
+
     case .screenShot:
-      return "Screenshoted"
-      
+      return (NSLocalizedString("osd.screenshot", comment: "Screenshot Captured"), .normal)
+
     case .abLoop(let value):
       if value == 1 {
-        return "AB-Loop: A"
+        return (NSLocalizedString("osd.abloop.a", comment: "AB-Loop: A"), .withText("{{position}} / {{duration}}"))
       } else if value == 2 {
-        return "AB-Loop: B"
+        return (NSLocalizedString("osd.abloop.b", comment: "AB-Loop: B"), .withText("{{position}} / {{duration}}"))
       } else {
-        return "AB-Loop: Clear Both"
+        return (NSLocalizedString("osd.abloop.clear", comment: "AB-Loop: Cleared"), .normal)
       }
-      
+
     case .stop:
-      return "Stopped"
-      
+      return (NSLocalizedString("osd.stop", comment: "Stop"), .normal)
+
     case .chapter(let name):
-      return "Go to \"\(name)\""
-      
+      return (
+        String(format: NSLocalizedString("osd.chapter", comment: "Chapter: %@"), name),
+        .withText("({{currChapter}}/{{chapterCount}}) {{position}} / {{duration}}")
+      )
+
+    case .track(let track):
+      let trackTypeStr: String
+      switch track.type {
+      case .video: trackTypeStr = "Video"
+      case .audio: trackTypeStr = "Audio"
+      case .sub: trackTypeStr = "Subtitle"
+      case .secondSub: trackTypeStr = "Second Sub"
+      }
+      return (trackTypeStr + ": " + track.readableTitle, .normal)
+
     case .subScale(let value):
-      return "Subtitle Scale: \(value)x"
-      
+      return (
+        String(format: NSLocalizedString("osd.subtitle_scale", comment: "Subtitle Scale: %.2fx"), value),
+        .normal
+      )
+
     case .addToPlaylist(let count):
-      return "Added \(count) files to playlist"
-      
+      return (
+        String(format: NSLocalizedString("osd.add_to_playlist", comment: "Added %i Files to Playlist"), count),
+        .normal
+      )
+
     case .clearPlaylist:
-      return "Cleared playlist"
-      
+      return (NSLocalizedString("osd.clear_playlist", comment: "Cleared Playlist"), .normal)
+
     case .contrast(let value):
-      return "Contrast: \(value)"
-      
+      return (
+        String(format: NSLocalizedString("osd.video_eq.contrast", comment: "Contrast: %i"), value),
+        .withProgress(toPercent(Double(value), 100))
+      )
+
     case .gamma(let value):
-      return "Gamma: \(value)"
-      
+      return (
+        String(format: NSLocalizedString("osd.video_eq.gamma", comment: "Grama: %i"), value),
+        .withProgress(toPercent(Double(value), 100))
+      )
+
     case .hue(let value):
-      return "Hue: \(value)"
-      
+      return (
+        String(format: NSLocalizedString("osd.video_eq.hue", comment: "Hue: %i"), value),
+        .withProgress(toPercent(Double(value), 100))
+      )
+
     case .saturation(let value):
-      return "Saturation: \(value)"
-      
+      return (
+        String(format: NSLocalizedString("osd.video_eq.saturation", comment: "Saturation: %i"), value),
+        .withProgress(toPercent(Double(value), 100))
+      )
+
     case .brightness(let value):
-      return "Brightness: \(value)"
-      
+      return (
+        String(format: NSLocalizedString("osd.video_eq.brightness", comment: "Brightness: %i"), value),
+        .withProgress(toPercent(Double(value), 100))
+      )
+
+    case .startFindingSub(let source):
+      return (
+        NSLocalizedString("osd.find_online_sub", comment: "Finding online subtitles..."),
+        .withText("from " + source)
+      )
+
+    case .foundSub(let count):
+      let str = count == 0 ?
+        NSLocalizedString("osd.sub_not_found", comment: "No subtitle found.") :
+        String(format: NSLocalizedString("osd.sub_found", comment: "%d subtitle(s) found. Downloading..."), count)
+      return (str, .normal)
+
+    case .downloadedSub(let filename):
+      return (
+        NSLocalizedString("osd.sub_downloaded", comment: "Subtitle downloaded"),
+        .withText(filename)
+      )
+
+    case .savedSub:
+      return (
+        NSLocalizedString("osd.sub_saved", comment: "Subtitle saved"),
+        .normal
+      )
+
+    case .networkError:
+      return (
+        NSLocalizedString("osd.network_error", comment: "Network error"),
+        .normal
+      )
+
+    case .fileError:
+      return (
+        NSLocalizedString("osd.file_error", comment: "Error reading file"),
+        .normal
+      )
+
+    case .cannotLogin:
+      return (
+        NSLocalizedString("osd.cannot_login", comment: "Cannot login"),
+        .normal
+      )
+
+    case .canceled:
+      return (
+        NSLocalizedString("osd.canceled", comment: "Canceled"),
+        .normal
+      )
     }
   }
 }
